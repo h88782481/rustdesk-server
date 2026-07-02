@@ -38,8 +38,6 @@ jobs:
       
       - name: Checkout
         uses: actions/checkout@v3
-        with:
-          submodules: recursive
 
       - name: Install toolchain
         uses: actions-rs/toolchain@v1
@@ -73,9 +71,13 @@ jobs:
 
 
   # docker build and push of single-arch images
+  # Docker Hub push is disabled by default (only GHCR is used, see ghcr.yml).
+  # To enable: set repository variable ENABLE_DOCKER_HUB=true and configure
+  # DOCKER_USERNAME / DOCKER_PASSWORD / DOCKER_IMAGE secrets.
   docker:
 
     name: Docker push - ${{ matrix.job.name }}
+    if: ${{ vars.ENABLE_DOCKER_HUB == 'true' }}
     needs: build
     runs-on: ubuntu-24.04
     strategy:
@@ -91,8 +93,6 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v3
-        with:
-          submodules: recursive
         
       - name: Download binaries
         uses: actions/download-artifact@v4

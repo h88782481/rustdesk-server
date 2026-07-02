@@ -16,6 +16,10 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+-[0-9]+'
       - '[0-9]+.[0-9]+.[0-9]+-[0-9]+'
 
+permissions:
+  contents: write
+  packages: write
+
 env:
   CARGO_TERM_COLOR: always
   LATEST_TAG: latest
@@ -41,8 +45,6 @@ jobs:
       
       - name: Checkout
         uses: actions/checkout@v3
-        with:
-          submodules: recursive
 
       - name: Install toolchain
         uses: actions-rs/toolchain@v1
@@ -82,8 +84,6 @@ jobs:
       
       - name: Checkout
         uses: actions/checkout@v3
-        with:
-          submodules: recursive
 
       - name: Install toolchain
         uses: actions-rs/toolchain@v1
@@ -208,9 +208,13 @@ jobs:
           files: ${{ matrix.job.name }}/rustdesk-server-${{ matrix.job.os }}-${{ matrix.job.name }}${{ matrix.job.suffix }}.zip
             
   # docker build and push of single-arch images
+  # Docker Hub push is disabled by default (only GHCR is used, see ghcr.yml).
+  # To enable: set repository variable ENABLE_DOCKER_HUB=true and configure
+  # DOCKER_USERNAME / DOCKER_PASSWORD / DOCKER_IMAGE / DOCKER_IMAGE_CLASSIC secrets.
   docker:
 
     name: Docker push - ${{ matrix.job.name }}
+    if: ${{ vars.ENABLE_DOCKER_HUB == 'true' }}
     needs: build
     runs-on: ubuntu-24.04
     strategy:
@@ -226,8 +230,6 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v3
-        with:
-          submodules: recursive
         
       - name: Download binaries
         uses: actions/download-artifact@v4
@@ -343,9 +345,11 @@ jobs:
 
             
   # docker build and push of single-arch images
+  # Disabled by default, same as the "docker" job above (only GHCR is used).
   docker-classic:
 
     name: Docker push classic - ${{ matrix.job.name }}
+    if: ${{ vars.ENABLE_DOCKER_HUB == 'true' }}
     needs: build
     runs-on: ubuntu-24.04
     strategy:
@@ -360,8 +364,6 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v3
-        with:
-          submodules: recursive
         
       - name: Download binaries
         uses: actions/download-artifact@v4
@@ -480,8 +482,6 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v3
-        with:
-          submodules: recursive
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
