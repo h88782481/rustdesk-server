@@ -70,7 +70,6 @@
   <a href="#如何创建密钥">密钥</a> •
   <a href="#deb-套件">Debian</a> •
   <a href="#ENV-环境参数">环境参数</a><br>
-  [<a href="README-EN.md">English</a>] | [<a href="README-DE.md">Deutsch</a>] | [<a href="README-NL.md">Nederlands</a>] | [<a href="README-TW.md">繁体中文</a>]<br>
 </p>
 
 # RustDesk Server Program
@@ -186,21 +185,12 @@ services:
 | --------- | ------- | -------------------------------------------- |
 | multiarch | latest  | `ghcr.io/h88782481/rustdesk-server-s6:latest`         |
 | amd64     | latest  | `ghcr.io/h88782481/rustdesk-server-s6:latest-amd64`   |
-| i386      | latest  | `ghcr.io/h88782481/rustdesk-server-s6:latest-i386`    |
 | arm64v8   | latest  | `ghcr.io/h88782481/rustdesk-server-s6:latest-arm64v8` |
 | armv7     | latest  | `ghcr.io/h88782481/rustdesk-server-s6:latest-armv7`   |
-| multiarch | 2       | `ghcr.io/h88782481/rustdesk-server-s6:2`              |
-| amd64     | 2       | `ghcr.io/h88782481/rustdesk-server-s6:2-amd64`        |
-| i386      | 2       | `ghcr.io/h88782481/rustdesk-server-s6:2-i386`         |
-| arm64v8   | 2       | `ghcr.io/h88782481/rustdesk-server-s6:2-arm64v8`      |
-| armv7     | 2       | `ghcr.io/h88782481/rustdesk-server-s6:2-armv7`        |
-| multiarch | 2.0.0   | `ghcr.io/h88782481/rustdesk-server-s6:2.0.0`          |
-| amd64     | 2.0.0   | `ghcr.io/h88782481/rustdesk-server-s6:2.0.0-amd64`    |
-| i386      | 2.0.0   | `ghcr.io/h88782481/rustdesk-server-s6:2.0.0-i386`     |
-| arm64v8   | 2.0.0   | `ghcr.io/h88782481/rustdesk-server-s6:2.0.0-arm64v8`  |
-| armv7     | 2.0.0   | `ghcr.io/h88782481/rustdesk-server-s6:2.0.0-armv7`    |
 
-强烈建议您使用`major version` 或 `latest` tag 的 `multiarch` 架构的镜像。
+发布版本（推送 git tag）时还会同时推送对应的版本号 tag，例如 `v0.1.3` 和 `v0`。
+
+强烈建议您使用 `latest` tag 的 `multiarch` 架构的镜像。
 
 S6-overlay 在此处作为监控程序，用以保证两个进程的运行，因此使用此镜像，您无需运行两个容器。
 
@@ -307,6 +297,29 @@ services:
       - ./db:/db
     restart: unless-stopped
 ```
+
+上面端口映射（bridge）方式部署时，hbbs 看到的客户端源地址会被 Docker NAT 改写，**P2P 直连（打洞）无法工作**，所有连接都会走中继。推荐使用 host 网络模式部署（仅 Linux 有效），hbbs 可以看到客户端真实的公网地址，打洞才能正常工作：
+
+```yaml
+version: '3'
+
+services:
+  rustdesk-server:
+    container_name: rustdesk-server
+    network_mode: host
+    image: ghcr.io/h88782481/rustdesk-server-s6:latest
+    environment:
+      - "RELAY=rustdesk.example.com:21117"
+      - "ENCRYPTED_ONLY=1"
+      - "DB_URL=/db/db_v2.sqlite3"
+      - "KEY_PRIV=FR2j78IxfwJNR+HjLluQ2Nh7eEryEeIZCwiQDPVe+PaITKyShphHAsPLn7So0OqRs92nGvSRdFJnE2MSyrKTIQ=="
+      - "KEY_PUB=iEyskoaYRwLDy5+0qNDqkbPdpxr0kXRSZxNjEsqykyE="
+    volumes:
+      - ./db:/db
+    restart: unless-stopped
+```
+
+> 注意：`network_mode: host` 时 `ports` 配置会被忽略（服务直接监听宿主机的 21114-21119 端口），请确保这些端口未被其他程序占用。
 
 #### 使用 Docker Secret 來保存密钥对
 
