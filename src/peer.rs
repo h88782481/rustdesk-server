@@ -132,6 +132,29 @@ impl PeerMap {
         register_pk_response::Result::OK
     }
 
+    // Rename a registered peer (change ID). The peer keeps its guid, uuid and pk.
+    #[inline]
+    pub(crate) async fn rename(
+        &self,
+        old_id: &str,
+        new_id: &str,
+        peer: LockPeer,
+    ) -> ResultType<()> {
+        let (guid, pk, info_str) = {
+            let r = peer.read().await;
+            (
+                r.guid.clone(),
+                r.pk.clone(),
+                serde_json::to_string(&r.info).unwrap_or_default(),
+            )
+        };
+        self.db.update_pk(&guid, new_id, &pk, &info_str).await?;
+        let mut w = self.map.write().await;
+        w.remove(old_id);
+        w.insert(new_id.to_owned(), peer.clone());
+        Ok(())
+    }
+
     #[inline]
     pub(crate) async fn get(&self, id: &str) -> Option<LockPeer> {
         let p = self.map.read().await.get(id).cloned();
