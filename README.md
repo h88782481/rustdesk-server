@@ -10,6 +10,9 @@
 - 是否必须登录才能链接， `MUST_LOGIN` 默认为 `N`，设置为 `Y` 则必须登录才能链接
 - `RUSTDESK_API_JWT_KEY`，设置后会通过`JWT`校验token的合法性
 - 支持client websocket (client >= 1.4.1)
+- 支持 `-b` / `BIND` 绑定指定网卡 IP（不填则仍监听全部网卡）；绑了具体 IP 时，运行时控制台会额外听 `127.0.0.1`
+- 本机控制台可用 `punch-requests` / `pr` 查看打洞请求日志
+- WebSocket 端口（`21118`/`21119`）不要对公网裸奔：`X-Forwarded-For` / `X-Real-IP` 可被伪造，只应让反向代理连到这两个口
 
 ## docker镜像地址
 
@@ -34,6 +37,7 @@
        - RELAY=<relay_server[:port]>
        - ENCRYPTED_ONLY=1
        - MUST_LOGIN=N
+       # - BIND=<本机网卡IP>  # 可选；不填=监听全部网卡
        - TZ=Asia/Shanghai
        - RUSTDESK_API_RUSTDESK_ID_SERVER=<id_server[:21116]>
        - RUSTDESK_API_RUSTDESK_RELAY_SERVER=<relay_server[:21117]>
@@ -69,7 +73,7 @@
   <a href="#基于-S6-overlay-的镜像">S6-overlay</a> •
   <a href="#如何创建密钥">密钥</a> •
   <a href="#deb-套件">Debian</a> •
-  <a href="#ENV-环境参数">环境参数</a><br>
+  <a href="#env-环境变量">环境参数</a><br>
 </p>
 
 # RustDesk Server Program
@@ -235,6 +239,7 @@ services:
     environment:
       - "RELAY=rustdesk.example.com:21117"
       - "ENCRYPTED_ONLY=1"
+      # - "BIND=1.2.3.4"   # 可选；不填=监听全部网卡
     volumes:
       - ./data:/data
     restart: unless-stopped
@@ -246,6 +251,8 @@ services:
 |----------------|------|--------------------------|
 | RELAY          | 否    | 运行此容器的宿主机的 IP 地址/ DNS 名称 |
 | ENCRYPTED_ONLY | 是    | 如果设置为 **"1"**，将不接受未加密的连接。 |
+| BIND           | 是    | 绑定的本机网卡 IP；不填则监听全部网卡。绑了具体 IP 时，运行时控制台仍听 `127.0.0.1` |
+| MUST_LOGIN     | 是    | `Y` 时必须登录才能发起连接（配合 API / JWT） |
 | KEY_PUB        | 是    | 密钥对中的公钥（Public Key）      |
 | KEY_PRIV       | 是    | 密钥对中的私钥（Private Key）     |
 
@@ -312,6 +319,7 @@ services:
       - "RELAY=rustdesk.example.com:21117"
       - "ENCRYPTED_ONLY=1"
       - "DB_URL=/db/db_v2.sqlite3"
+      # - "BIND=1.2.3.4"   # 可选；host 网络下绑指定网卡，不填=全部网卡
       - "KEY_PRIV=FR2j78IxfwJNR+HjLluQ2Nh7eEryEeIZCwiQDPVe+PaITKyShphHAsPLn7So0OqRs92nGvSRdFJnE2MSyrKTIQ=="
       - "KEY_PUB=iEyskoaYRwLDy5+0qNDqkbPdpxr0kXRSZxNjEsqykyE="
     volumes:
@@ -415,13 +423,42 @@ Secret Key:  egAVd44u33ZEUIDTtksGcHeVeAwywarEdHmf99KM5ajwEsuG3NQFT9coAfiZ6nen4hf
 | 参数                    | 可执行文件         | 描述                                               |
 |-----------------------|---------------|--------------------------------------------------|
 | ALWAYS_USE_RELAY      | hbbs          | 如果设定为 **"Y"**，将关闭直接点对点连接功能                       |
+| BIND                  | hbbs/hbbr     | 绑定的本机网卡 IP（CLI：`-b`）。不填则监听全部网卡。绑了具体 IP 时，运行时控制台会额外听 `127.0.0.1` |
 | DB_URL                | hbbs          | 数据库配置                                            |
-| DOWNGRADE_START_CHECK | hbbr          | 降级检查之前的延迟是啊尽（以秒为单位）                              |
+| DOWNGRADE_START_CHECK | hbbr          | 降级检查之前的延迟时间（以秒为单位）                              |
 | DOWNGRADE_THRESHOLD   | hbbr          | 降级检查的阈值（bit/ms）                                  |
 | KEY                   | hbbs/hbbr     | 如果设置了此参数，将强制使用指定密钥对，如果设为 **"_"**，则强制使用任意密钥       |
 | LIMIT_SPEED           | hbbr          | 速度限制（以Mb/s为单位）                                   |
+| MUST_LOGIN            | hbbs          | `Y` 时必须登录才能发起连接；也可在控制台用 `must-login` / `ml` 热切换 |
 | PORT                  | hbbs/hbbr     | 监听端口（hbbs为21116，hbbr为21117）                      |
 | RELAY_SERVERS         | hbbs          | 运行hbbr的机器的IP地址/DNS名称（用逗号分隔）                      |
+| RUSTDESK_API_JWT_KEY  | hbbs          | 设置后用 JWT 校验打洞请求里的 token                         |
 | RUST_LOG              | all           | 设置 debug level (error\|warn\|info\|debug\|trace) |
 | SINGLE_BANDWIDTH      | hbbr          | 单个连接的最大带宽（以Mb/s为单位）                              |
 | TOTAL_BANDWIDTH       | hbbr          | 最大总带宽（以Mb/s为单位）                                  |
+
+CLI 与环境变量等价：`hbbs -b 192.168.1.10` 等同 `BIND=192.168.1.10`。host 网络下把 `BIND` 设成宿主机那块网卡的 IP 即可；单公网 IP 通常不用设。
+
+### 运行时控制台
+
+控制台是打到回环地址的一条 TCP 命令（不是 stdin），不是 `rustdesk-utils`。
+
+```bash
+# hbbs：NAT 检测口，默认 21115（PORT-1）
+printf 'h' | nc 127.0.0.1 21115
+printf 'punch-requests' | nc 127.0.0.1 21115    # 或 pr
+printf 'pr 0 20' | nc 127.0.0.1 21115           # 分页
+printf 'pr -' | nc 127.0.0.1 21115              # 清空
+printf 'must-login Y' | nc 127.0.0.1 21115      # 或 ml Y
+
+# hbbr：中继口，默认 21117
+printf 'h' | nc 127.0.0.1 21117
+```
+
+改过 `PORT` 时，把上面的端口换成对应的 `PORT-1` / `PORT`。
+
+`BIND` 为空或 `0.0.0.0` 时，控制台走已有监听（本机连 `127.0.0.1` 即可）。`BIND` 是某块网卡的具体 IP 时，会额外在 `127.0.0.1` 上开控制台，避免只能从那块网卡连。
+
+### WebSocket 端口
+
+`21118`（hbbs）和 `21119`（hbbr）给 Web 客户端用。握手时会信任 `X-Real-IP` / `X-Forwarded-For`，**这两个头可伪造**。不要把 WS 端口直接暴露到公网；只让反向代理连到它们，由代理覆盖这些头。

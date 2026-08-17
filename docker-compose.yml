@@ -16,6 +16,7 @@ services:
       - RELAY=<relay_server[:port]>
       - ENCRYPTED_ONLY=1
       - MUST_LOGIN=N
+      # - BIND=<本机网卡IP>  # 可选；不填=监听全部网卡。绑了具体 IP 时控制台仍听 127.0.0.1
       - TZ=Asia/Shanghai
       - RUSTDESK_API_RUSTDESK_ID_SERVER=<id_server[:21116]>
       - RUSTDESK_API_RUSTDESK_RELAY_SERVER=<relay_server[:21117]>

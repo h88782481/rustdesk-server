@@ -7,9 +7,67 @@ use sodiumoxide::crypto::sign;
 use std::{
     io::prelude::*,
     io::Read,
-    net::SocketAddr,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     time::{Instant, SystemTime},
 };
+
+pub fn parse_bind_address(value: &str) -> Result<Option<IpAddr>> {
+    let value = value.trim();
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        value
+            .parse()
+            .with_context(|| format!("Invalid bind address: {value}"))
+            .map(Some)
+    }
+}
+
+pub async fn listen_tcp(
+    bind_addr: Option<IpAddr>,
+    port: u16,
+) -> ResultType<hbb_common::tokio::net::TcpListener> {
+    if let Some(bind_addr) = bind_addr {
+        hbb_common::tcp::new_listener(SocketAddr::new(bind_addr, port), true).await
+    } else {
+        hbb_common::tcp::listen_any(port).await
+    }
+}
+
+pub fn console_addr(bind_addr: Option<IpAddr>, port: u16) -> Option<SocketAddr> {
+    let bind_addr = bind_addr?;
+    if bind_addr.is_unspecified() || bind_addr == IpAddr::V4(Ipv4Addr::LOCALHOST) {
+        return None;
+    }
+    Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port))
+}
+
+// The runtime console (check_cmd) is reached via 127.0.0.1, so when the bind
+// address does not already accept connections to 127.0.0.1 (it is neither the
+// any-address nor 127.0.0.1 itself), the console gets a dedicated listener
+// there; it is never bound to the external bind address.
+pub async fn listen_console(
+    bind_addr: Option<IpAddr>,
+    port: u16,
+) -> ResultType<Option<hbb_common::tokio::net::TcpListener>> {
+    match console_addr(bind_addr, port) {
+        Some(addr) => {
+            let listener = hbb_common::tcp::new_listener(addr, true).await?;
+            log::info!("Listening on tcp {} for the console", addr);
+            Ok(Some(listener))
+        }
+        None => Ok(None),
+    }
+}
+
+pub async fn accept_or_pending(
+    listener: Option<&hbb_common::tokio::net::TcpListener>,
+) -> std::io::Result<(hbb_common::tokio::net::TcpStream, SocketAddr)> {
+    match listener {
+        Some(listener) => listener.accept().await,
+        None => std::future::pending().await,
+    }
+}
 
 #[allow(dead_code)]
 pub(crate) fn get_expired_time() -> Instant {
@@ -53,6 +111,12 @@ fn arg_name(name: &str) -> String {
 }
 
 #[allow(dead_code)]
+#[inline]
+pub fn set_arg(name: &str, value: &str) {
+    std::env::set_var(arg_name(name), value);
+}
+
+#[allow(dead_code)]
 pub fn init_args(args: &str, name: &str, about: &str) {
     let matches = App::new(name)
         .version(crate::version::VERSION)
@@ -62,25 +126,46 @@ pub fn init_args(args: &str, name: &str, about: &str) {
         .get_matches();
     if let Ok(v) = Ini::load_from_file(".env") {
         if let Some(section) = v.section(None::<String>) {
-            section
-                .iter()
-                .for_each(|(k, v)| std::env::set_var(arg_name(k), v));
+            section.iter().for_each(|(k, v)| set_arg(k, v));
         }
     }
     if let Some(config) = matches.value_of("config") {
         if let Ok(v) = Ini::load_from_file(config) {
             if let Some(section) = v.section(None::<String>) {
-                section
-                    .iter()
-                    .for_each(|(k, v)| std::env::set_var(arg_name(k), v));
+                section.iter().for_each(|(k, v)| set_arg(k, v));
             }
         }
     }
     for (k, v) in matches.args {
         if let Some(v) = v.vals.first() {
-            std::env::set_var(arg_name(k), v.to_string_lossy().to_string());
+            set_arg(k, &v.to_string_lossy());
         }
     }
+}
+
+#[allow(dead_code)]
+pub fn get_arg_opt(name: &str) -> Option<String> {
+    let dashed = arg_name(name);
+    let underscored = dashed.replace('-', "_");
+    let lower_dashed = dashed.to_lowercase();
+    let lower_underscored = underscored.to_lowercase();
+    for alias in [&dashed, &underscored, &lower_dashed, &lower_underscored] {
+        if let Ok(value) = std::env::var(alias) {
+            return Some(value);
+        }
+    }
+    let mut aliases = std::env::vars_os()
+        .filter_map(|(key, value)| {
+            let key = key.into_string().ok()?;
+            if arg_name(&key) == dashed {
+                Some((key, value.into_string().ok()?))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    aliases.sort_by(|a, b| a.0.cmp(&b.0));
+    aliases.into_iter().next().map(|(_, value)| value)
 }
 
 #[allow(dead_code)]
@@ -92,7 +177,7 @@ pub fn get_arg(name: &str) -> String {
 #[allow(dead_code)]
 #[inline]
 pub fn get_arg_or(name: &str, default: String) -> String {
-    std::env::var(arg_name(name)).unwrap_or(default)
+    get_arg_opt(name).unwrap_or(default)
 }
 
 #[allow(dead_code)]
@@ -121,7 +206,6 @@ pub fn gen_sk(wait: u64) -> (String, Option<sign::SecretKey>) {
                 log::info!("Private key comes from {}", sk_file);
                 return (pk, Some(sign::SecretKey(tmp)));
             } else {
-                // don't use log here, since it is async
                 println!("Fatal error: malformed private key in {sk_file}.");
                 std::process::exit(1);
             }
@@ -189,7 +273,6 @@ pub async fn listen_signal() -> Result<()> {
     unreachable!();
 }
 
-
 pub fn check_software_update() {
     const ONE_DAY_IN_SECONDS: u64 = 60 * 60 * 24;
     std::thread::spawn(move || loop {
@@ -200,8 +283,10 @@ pub fn check_software_update() {
 
 #[tokio::main(flavor = "current_thread")]
 async fn check_software_update_() -> hbb_common::ResultType<()> {
-    let (request, url) = hbb_common::version_check_request(hbb_common::VER_TYPE_RUSTDESK_SERVER.to_string());
-    let latest_release_response = reqwest::Client::builder().build()?
+    let (request, url) =
+        hbb_common::version_check_request(hbb_common::VER_TYPE_RUSTDESK_SERVER.to_string());
+    let latest_release_response = reqwest::Client::builder()
+        .build()?
         .post(url)
         .json(&request)
         .send()
@@ -212,7 +297,102 @@ async fn check_software_update_() -> hbb_common::ResultType<()> {
     let response_url = resp.url;
     let latest_release_version = response_url.rsplit('/').next().unwrap_or_default();
     if get_version_number(&latest_release_version) > get_version_number(crate::version::VERSION) {
-       log::info!("new version is available: {}", latest_release_version);
+        log::info!("new version is available: {}", latest_release_version);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv6Addr;
+
+    #[test]
+    fn argument_names_ignore_case_and_separator() {
+        let aliases = [
+            "RUSTDESK-CONFIG-ALIAS-TEST",
+            "RUSTDESK_CONFIG_ALIAS_TEST",
+            "rustdesk-config-alias-test",
+            "rustdesk_config_alias_test",
+            "RustDesk_Config-Alias_Test",
+        ];
+        for alias in aliases {
+            std::env::remove_var(alias);
+        }
+        for alias in aliases {
+            std::env::set_var(alias, alias);
+            assert_eq!(get_arg("RUSTDESK_CONFIG_ALIAS_TEST"), alias);
+            std::env::remove_var(alias);
+        }
+        set_arg("rustdesk_config_alias_test", "normalized");
+        assert_eq!(
+            std::env::var("RUSTDESK-CONFIG-ALIAS-TEST").unwrap(),
+            "normalized"
+        );
+        std::env::set_var("RUSTDESK_CONFIG_ALIAS_TEST", "inherited");
+        set_arg("rustdesk-config-alias-test", "higher-priority");
+        assert_eq!(get_arg("rustdesk_config_alias_test"), "higher-priority");
+        std::env::remove_var("RUSTDESK-CONFIG-ALIAS-TEST");
+        std::env::remove_var("RUSTDESK_CONFIG_ALIAS_TEST");
+    }
+
+    #[test]
+    fn parses_bind_address() {
+        assert_eq!(parse_bind_address("").unwrap(), None);
+        assert_eq!(
+            parse_bind_address("127.0.0.1").unwrap(),
+            Some(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        );
+        assert_eq!(
+            parse_bind_address("::1").unwrap(),
+            Some(IpAddr::V6(Ipv6Addr::LOCALHOST))
+        );
+        assert!(parse_bind_address("not-an-ip").is_err());
+    }
+
+    #[hbb_common::tokio::test]
+    async fn tcp_listener_uses_bind_address() {
+        let bind_addr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let listener = listen_tcp(Some(bind_addr), 0).await.unwrap();
+        assert_eq!(listener.local_addr().unwrap().ip(), bind_addr);
+    }
+
+    #[test]
+    fn console_addr_only_when_bind_does_not_cover_ipv4_localhost() {
+        for bind_addr in [
+            None,
+            Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+            Some(IpAddr::V6(Ipv6Addr::UNSPECIFIED)),
+            Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        ] {
+            assert_eq!(console_addr(bind_addr, 21117), None);
+        }
+        for bind_addr in [
+            Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1))),
+            Some("2001:db8::1".parse().unwrap()),
+            Some(IpAddr::V6(Ipv6Addr::LOCALHOST)),
+        ] {
+            assert_eq!(
+                console_addr(bind_addr, 21117),
+                Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 21117))
+            );
+        }
+    }
+
+    #[hbb_common::tokio::test]
+    async fn console_listener_binds_ipv4_localhost() {
+        let listener = listen_console(Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1))), 0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            listener.local_addr().unwrap().ip(),
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        );
+        assert!(listen_console(None, 0).await.unwrap().is_none());
+        assert!(listen_console(Some(IpAddr::V4(Ipv4Addr::LOCALHOST)), 0)
+            .await
+            .unwrap()
+            .is_none());
+    }
 }
